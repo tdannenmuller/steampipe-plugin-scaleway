@@ -5,7 +5,7 @@ description: "Allows users to query Scaleway Invoices, providing detailed inform
 
 # Table: scaleway_invoice - Query Scaleway Invoices using SQL
 
-Scaleway Invoices are detailed records of charges for the use of Scaleway's cloud services.
+Scaleway Invoices are detailed records of charges for the use of Scaleway's cloud services. These invoices provide a comprehensive breakdown of costs associated with various resources and services used within a Scaleway account.
 
 ## Table Usage Guide
 
@@ -21,26 +21,11 @@ SELECT
   id,
   organization_id,
   billing_period,
-  total_taxed,
-  state
+  total_taxed_amount,
+  state,
+  currency
 FROM
-  scaleway_invoice;
-```
-
-### List unpaid invoices
-Identify any outstanding payments by listing all unpaid invoices. This query helps in managing financial obligations and ensuring timely payments.
-
-```sql
-SELECT
-  id,
-  organization_id,
-  billing_period,
-  total_taxed,
-  due_date
-FROM
-  scaleway_invoice
-WHERE
-  state = 'unpaid';
+  scaleway_invoices;
 ```
 
 ### Get total billed amount for each organization
@@ -49,11 +34,13 @@ Calculate the total amount billed to each organization. This provides an overvie
 ```sql
 SELECT
   organization_id,
-  SUM(CAST(total_taxed AS DECIMAL)) as total_billed
+  SUM(total_taxed_amount) as total_billed,
+  currency
 FROM
-  scaleway_invoice
+  scaleway_invoices
 GROUP BY
-  organization_id;
+  organization_id,
+  currency;
 ```
 
 ### Find invoices with high discount amounts
@@ -63,14 +50,15 @@ Identify invoices with significant discounts. This can help in understanding whi
 SELECT
   id,
   billing_period,
-  total_discount,
-  total_taxed
+  total_discount_amount,
+  total_taxed_amount,
+  currency
 FROM
-  scaleway_invoice
+  scaleway_invoices
 WHERE
-  CAST(total_discount AS DECIMAL) > 100
+  total_discount_amount > 1000
 ORDER BY
-  CAST(total_discount AS DECIMAL) DESC;
+  total_discount_amount DESC;
 ```
 
 ### List invoices for a specific date range
@@ -80,10 +68,11 @@ Retrieve invoices within a specific time frame. This is useful for periodic fina
 SELECT
   id,
   billing_period,
-  total_taxed,
-  issued_date
+  total_taxed_amount,
+  issued_date,
+  currency
 FROM
-  scaleway_invoice
+  scaleway_invoices
 WHERE
   issued_date BETWEEN '2023-01-01' AND '2023-12-31'
 ORDER BY
@@ -96,11 +85,48 @@ Calculate the average invoice amount for each month. This helps in understanding
 ```sql
 SELECT
   DATE_TRUNC('month', issued_date) AS month,
-  AVG(CAST(total_taxed AS DECIMAL)) AS average_invoice_amount
+  AVG(total_taxed_amount) AS average_invoice_amount,
+  currency
 FROM
-  scaleway_invoice
+  scaleway_invoices
 GROUP BY
-  DATE_TRUNC('month', issued_date)
+  DATE_TRUNC('month', issued_date),
+  currency
 ORDER BY
   month;
+```
+
+### Compare total taxed and untaxed amounts
+Analyze the difference between taxed and untaxed amounts for each invoice to understand the tax impact on your cloud spending.
+
+```sql
+SELECT
+  id,
+  total_untaxed_amount,
+  total_taxed_amount,
+  total_taxed_amount - total_untaxed_amount AS tax_amount,
+  currency
+FROM
+  scaleway_invoices
+ORDER BY
+  tax_amount DESC;
+```
+
+### Examine discounts and their impact
+Investigate how discounts affect your invoices by comparing the undiscounted amount to the final taxed amount.
+
+```sql
+SELECT
+  id,
+  total_undiscount_amount,
+  total_discount_amount,
+  total_taxed_amount,
+  total_discount_amount / total_undiscount_amount * 100 AS discount_percentage,
+  currency
+FROM
+  scaleway_invoices
+WHERE
+  total_discount_amount > 0
+ORDER BY
+  discount_percentage DESC;
 ```

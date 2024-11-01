@@ -3,49 +3,171 @@ package scaleway
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	billing "github.com/scaleway/scaleway-sdk-go/api/billing/v2beta1"
+
 	"github.com/scaleway/scaleway-sdk-go/scw"
 	"github.com/turbot/steampipe-plugin-sdk/v5/grpc/proto"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin"
 	"github.com/turbot/steampipe-plugin-sdk/v5/plugin/transform"
 )
 
-func tableScalewayInvoice(ctx context.Context) *plugin.Table {
-	plugin.Logger(ctx).Debug("Initializing Scaleway Invoice table")
+func tableScalewayInvoices(ctx context.Context) *plugin.Table {
+	plugin.Logger(ctx).Debug("Initializing Scaleway invoices table")
 	return &plugin.Table{
-		Name:        "scaleway_invoice",
-		Description: "Invoices in your Scaleway account.",
+		Name:        "scaleway_invoices",
+		Description: "invoices in your Scaleway account.",
 		List: &plugin.ListConfig{
-			Hydrate: listScalewayInvoices,
+			Hydrate: listScalewayinvoices,
 			KeyColumns: []*plugin.KeyColumn{
 				{Name: "organization_id", Require: plugin.Optional},
 			},
 		},
 		Columns: []*plugin.Column{
-			{Name: "id", Type: proto.ColumnType_STRING, Description: "The unique identifier of the invoice.", Transform: transform.FromField("ID")},
-			{Name: "organization_id", Type: proto.ColumnType_STRING, Description: "The organization ID associated with the invoice.", Transform: transform.FromField("OrganizationID")},
-			{Name: "organization_name", Type: proto.ColumnType_STRING, Description: "The organization name associated with the invoice."},
-			{Name: "start_date", Type: proto.ColumnType_TIMESTAMP, Description: "The start date of the billing period."},
-			{Name: "stop_date", Type: proto.ColumnType_TIMESTAMP, Description: "The end date of the billing period."},
-			{Name: "billing_period", Type: proto.ColumnType_TIMESTAMP, Description: "The billing period for the invoice."},
-			{Name: "issued_date", Type: proto.ColumnType_TIMESTAMP, Description: "The date when the invoice was issued."},
-			{Name: "due_date", Type: proto.ColumnType_TIMESTAMP, Description: "The due date for the invoice payment."},
-			{Name: "total_untaxed", Type: proto.ColumnType_JSON, Description: "The total amount before tax."},
-			{Name: "total_taxed", Type: proto.ColumnType_JSON, Description: "The total amount including tax."},
-			{Name: "total_tax", Type: proto.ColumnType_JSON, Description: "The total tax amount."},
-			{Name: "total_discount", Type: proto.ColumnType_JSON, Description: "The total discount amount."},
-			{Name: "total_undiscount", Type: proto.ColumnType_JSON, Description: "The total amount before discount."},
-			{Name: "type", Type: proto.ColumnType_STRING, Description: "The type of the invoice."},
-			{Name: "state", Type: proto.ColumnType_STRING, Description: "The current state of the invoice."},
-			{Name: "number", Type: proto.ColumnType_INT, Description: "The invoice number."},
-			{Name: "seller_name", Type: proto.ColumnType_STRING, Description: "The name of the seller."},
+			{
+				Name:        "id",
+				Type:        proto.ColumnType_STRING,
+				Description: "The unique identifier of the invoices.",
+				Transform:   transform.FromField("ID"),
+			},
+			{
+				Name:        "organization_id",
+				Type:        proto.ColumnType_STRING,
+				Description: "The organization ID associated with the invoices.",
+				Transform:   transform.FromField("OrganizationID"),
+			},
+			{
+				Name:        "organization_name",
+				Type:        proto.ColumnType_STRING,
+				Description: "The organization name associated with the invoices.",
+			},
+			{
+				Name:        "start_date",
+				Type:        proto.ColumnType_TIMESTAMP,
+				Description: "The start date of the billing period.",
+			},
+			{
+				Name:        "stop_date",
+				Type:        proto.ColumnType_TIMESTAMP,
+				Description: "The end date of the billing period.",
+			},
+			{
+				Name:        "billing_period",
+				Type:        proto.ColumnType_TIMESTAMP,
+				Description: "The billing period for the invoices.",
+			},
+			{
+				Name:        "issued_date",
+				Type:        proto.ColumnType_TIMESTAMP,
+				Description: "The date when the invoices was issued.",
+			},
+			{
+				Name:        "due_date",
+				Type:        proto.ColumnType_TIMESTAMP,
+				Description: "The due date for the invoices payment.",
+			},
+			{
+				Name:        "total_untaxed_amount",
+				Type:        proto.ColumnType_DOUBLE,
+				Description: "The total untaxed amount of the invoices.",
+				Transform:   transform.FromField("TotalUntaxed").Transform(extractAmount),
+			},
+			{
+				Name:        "total_taxed_amount",
+				Type:        proto.ColumnType_DOUBLE,
+				Description: "The total taxed amount of the invoices.",
+				Transform:   transform.FromField("TotalTaxed").Transform(extractAmount),
+			},
+			{
+				Name:        "total_discount_amount",
+				Type:        proto.ColumnType_DOUBLE,
+				Description: "The total discount amount of the invoice (always positive).",
+				Transform:   transform.FromField("TotalDiscount").Transform(extractAmount),
+			},
+			{
+				Name:        "total_undiscount_amount",
+				Type:        proto.ColumnType_DOUBLE,
+				Description: "The total undiscounted amount of the invoices.",
+				Transform:   transform.FromField("TotalUndiscount").Transform(extractAmount),
+			},
+			{
+				Name:        "currency",
+				Type:        proto.ColumnType_STRING,
+				Description: "The currency used for all monetary values in the invoices.",
+				Transform:   transform.FromField("TotalTaxed").Transform(extractCurrency),
+			},
+			{
+				Name:        "type",
+				Type:        proto.ColumnType_STRING,
+				Description: "The type of the invoices.",
+			},
+			{
+				Name:        "state",
+				Type:        proto.ColumnType_STRING,
+				Description: "The current state of the invoices.",
+			},
+			{
+				Name:        "number",
+				Type:        proto.ColumnType_INT,
+				Description: "The invoices number.",
+			},
+			{
+				Name:        "seller_name",
+				Type:        proto.ColumnType_STRING,
+				Description: "The name of the seller.",
+			},
 		},
 	}
 }
 
-type InvoiceItem struct {
+func extractAmount(ctx context.Context, d *transform.TransformData) (interface{}, error) {
+	plugin.Logger(ctx).Debug("extractAmount", "field", d.ColumnName, "raw_value", d.Value)
+
+	if d.Value == nil {
+		plugin.Logger(ctx).Warn("extractAmount: nil value", "field", d.ColumnName)
+		return nil, nil
+	}
+
+	switch v := d.Value.(type) {
+	case *scw.Money:
+		if v == nil {
+			return nil, nil
+		}
+		amount := float64(v.Units) + float64(v.Nanos)/1e9
+		// If it's the total_discount_amount, return the absolute value
+		if d.ColumnName == "total_discount_amount" {
+			return math.Abs(amount), nil
+		}
+		return amount, nil
+	default:
+		plugin.Logger(ctx).Warn("extractAmount: unexpected type", "type", fmt.Sprintf("%T", d.Value))
+		return nil, nil
+	}
+}
+
+func extractCurrency(ctx context.Context, d *transform.TransformData) (interface{}, error) {
+	plugin.Logger(ctx).Debug("extractCurrency", "field", d.ColumnName, "raw_value", d.Value)
+
+	if d.Value == nil {
+		plugin.Logger(ctx).Warn("extractCurrency: nil value", "field", d.ColumnName)
+		return nil, nil
+	}
+
+	switch v := d.Value.(type) {
+	case *scw.Money:
+		if v == nil {
+			return nil, nil
+		}
+		return v.CurrencyCode, nil
+	default:
+		plugin.Logger(ctx).Warn("extractCurrency: unexpected type", "type", fmt.Sprintf("%T", d.Value))
+		return nil, nil
+	}
+}
+
+type invoicesItem struct {
 	ID               string              `json:"id"`
 	OrganizationID   string              `json:"organization_id"`
 	OrganizationName string              `json:"organization_name"`
@@ -65,11 +187,11 @@ type InvoiceItem struct {
 	SellerName       string              `json:"seller_name"`
 }
 
-func listScalewayInvoices(ctx context.Context, d *plugin.QueryData, _ *plugin.HydrateData) (interface{}, error) {
+func listScalewayinvoices(ctx context.Context, d *plugin.QueryData, _ *plugin.HydrateData) (interface{}, error) {
 	// Get client configuration
 	client, err := getSessionConfig(ctx, d)
 	if err != nil {
-		plugin.Logger(ctx).Error("scaleway_invoice.listScalewayInvoices", "connection_error", err)
+		plugin.Logger(ctx).Error("scaleway_invoices.listScalewayinvoices", "connection_error", err)
 		return nil, err
 	}
 
@@ -103,35 +225,32 @@ func listScalewayInvoices(ctx context.Context, d *plugin.QueryData, _ *plugin.Hy
 	// Make the API request to list invoices
 	resp, err := billingAPI.ListInvoices(req)
 	if err != nil {
-		plugin.Logger(ctx).Error("scaleway_invoice.listScalewayInvoices", "api_error", err)
+		plugin.Logger(ctx).Error("scaleway_invoices.listScalewayinvoices", "api_error", err)
 		return nil, err
 	}
 
-	for _, invoice := range resp.Invoices {
-		item := InvoiceItem{
-			ID:               invoice.ID,
-			OrganizationID:   invoice.OrganizationID,
-			OrganizationName: invoice.OrganizationName,
-			StartDate:        invoice.StartDate,
-			StopDate:         invoice.StopDate,
-			IssuedDate:       invoice.IssuedDate,
-			DueDate:          invoice.DueDate,
-			TotalUntaxed:     invoice.TotalUntaxed,
-			TotalTaxed:       invoice.TotalTaxed,
-			TotalDiscount:    invoice.TotalDiscount,
-			TotalUndiscount:  invoice.TotalUndiscount,
-			TotalTax:         invoice.TotalTax,
-			Type:             invoice.Type,
-			Number:           invoice.Number,
-			State:            invoice.State,
-			BillingPeriod:    invoice.BillingPeriod,
-			SellerName:       invoice.SellerName,
+	for _, invoices := range resp.Invoices {
+		plugin.Logger(ctx).Debug("raw invoices data", "invoices", fmt.Sprintf("%+v", invoices))
+
+		item := invoicesItem{
+			ID:               invoices.ID,
+			OrganizationID:   invoices.OrganizationID,
+			OrganizationName: invoices.OrganizationName,
+			StartDate:        invoices.StartDate,
+			StopDate:         invoices.StopDate,
+			IssuedDate:       invoices.IssuedDate,
+			DueDate:          invoices.DueDate,
+			TotalUntaxed:     invoices.TotalUntaxed,
+			TotalTaxed:       invoices.TotalTaxed,
+			TotalDiscount:    invoices.TotalDiscount,
+			TotalUndiscount:  invoices.TotalUndiscount,
+			TotalTax:         invoices.TotalTax,
+			Type:             invoices.Type,
+			Number:           invoices.Number,
+			State:            invoices.State,
+			BillingPeriod:    invoices.BillingPeriod,
+			SellerName:       invoices.SellerName,
 		}
-
-		plugin.Logger(ctx).Debug("scaleway_invoice.listScalewayInvoices",
-			"invoice_item", item,
-		)
-
 		d.StreamListItem(ctx, item)
 	}
 
